@@ -1,0 +1,39 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+
+const connectRoutes = require('./routes/connect');
+const checkoutRoutes = require('./routes/checkout');
+const stripeWebhookRoutes = require('./webhooks/stripeWebhook');
+
+const app = express();
+
+// CORS : autorise votre frontend (l'Artifact, une fois hébergé sur un vrai
+// domaine) à appeler cette API depuis une origine différente. En
+// production, remplacez la valeur par défaut par votre domaine exact
+// (ex. 'https://atchef.fr') plutôt que de l'ouvrir à tout le monde.
+app.use(cors({ origin: process.env.APP_URL || '*' }));
+
+// ⚠️ ORDRE CRITIQUE DES MIDDLEWARES ⚠️
+// Le webhook Stripe a besoin du corps de requête BRUT (un Buffer non
+// modifié) pour pouvoir vérifier sa signature cryptographique. On monte
+// donc ses routes AVANT express.json() global : sinon, ce dernier aurait
+// déjà transformé le corps en objet JavaScript et la vérification de
+// signature échouerait systématiquement.
+app.use('/api', stripeWebhookRoutes);
+
+// Pour toutes les AUTRES routes, le JSON classique peut être parsé normalement.
+app.use(express.json());
+app.use('/api', connectRoutes);
+app.use('/api', checkoutRoutes);
+
+app.get('/', (req, res) => {
+  res.send("API At'Chef — paiements marketplace via Stripe Connect (Express).");
+});
+
+const PORT = process.env.PORT || 4242;
+app.listen(PORT, () => {
+  console.log(`✅ Serveur At'Chef démarré sur http://localhost:${PORT}`);
+});
+
+module.exports = app;
