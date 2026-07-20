@@ -60,11 +60,36 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
       const account = event.data.object;
       const cook = await db.findCookByStripeAccountId(account.id);
       if (cook) {
+        // Le statut de vérification d'identité du représentant du compte
+        // est déjà géré par Stripe Connect (pièce d'identité demandée
+        // pendant l'onboarding) : on récupère juste ce statut, pas besoin
+        // d'une vérification Stripe Identity séparée pour les cuisiniers.
+        const identityVerified = !!(account.individual
+          && account.individual.verification
+          && account.individual.verification.status === 'verified');
         await db.updateCook(cook.id, {
           chargesEnabled: account.charges_enabled,
           payoutsEnabled: account.payouts_enabled,
+          identityVerified,
         });
       }
+      break;
+    }
+
+    case 'identity.verification_session.verified': {
+      // Un hôte vient de terminer sa vérification Stripe Identity avec succès.
+      const session = event.data.object;
+      await db.updateHostVerificationBySessionId(session.id, { status: 'verifie' });
+      console.log(`✅ Identité vérifiée pour la session ${session.id}`);
+      break;
+    }
+
+    case 'identity.verification_session.requires_input': {
+      // La vérification a échoué ou nécessite une nouvelle tentative
+      // (document illisible, selfie ne correspondant pas, etc.).
+      const session = event.data.object;
+      await db.updateHostVerificationBySessionId(session.id, { status: 'echec' });
+      console.warn(`⚠️ Vérification d'identité à refaire pour la session ${session.id}`);
       break;
     }
 
