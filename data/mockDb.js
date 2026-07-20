@@ -55,6 +55,8 @@ const cooks = new Map([
 const bookings = new Map();
 let nextBookingId = 1;
 
+const tickets = new Map(); // tickets de support (SAV)
+
 // ⚠️ Démarre à 1000 : les cuisiniers d'exemple ci-dessus utilisent les id 1 et 2,
 // qui existent AUSSI en dur dans le frontend (Amélie, Karim...). En partant de
 // 1000, un nouveau cuisinier inscrit via le formulaire ne peut jamais entrer en
@@ -143,5 +145,42 @@ module.exports = {
 
   async getAllCooks() {
     return Array.from(cooks.values());
+  },
+
+  async getAllBookings() {
+    // Plus récentes en premier, pratique pour le back-office admin.
+    return Array.from(bookings.values()).sort((a, b) => b.id - a.id);
+  },
+
+  async createTicket(data) {
+    const id = Date.now();
+    const ticket = {
+      id,
+      name: data.name,
+      email: data.email,
+      role: data.role || 'non précisé',
+      subject: data.subject,
+      message: data.message,
+      status: 'ouvert', // 'ouvert' | 'en_cours' | 'resolu'
+      adminNote: '',
+      createdAt: new Date().toISOString(),
+    };
+    tickets.set(id, ticket);
+    return ticket;
+  },
+
+  async getAllTickets() {
+    return Array.from(tickets.values()).sort((a, b) => b.id - a.id);
+  },
+
+  async findTicketById(id) {
+    return tickets.get(Number(id)) || null;
+  },
+
+  async updateTicket(id, patch) {
+    const ticket = tickets.get(Number(id));
+    if (!ticket) return null;
+    Object.assign(ticket, patch);
+    return ticket;
   },
 };
