@@ -53,7 +53,7 @@ const COOKING_ONLY_RATIO = 0.6;
 
 router.post('/checkout/create-session', async (req, res) => {
   try {
-    const { cookId, formulaIndex, guestCount, allergies, eventDate, bookingType, fridgeContents, equipment } = req.body;
+    const { cookId, formulaIndex, guestCount, allergies, eventDate, bookingType, fridgeContents, equipment, hostEmail } = req.body;
 
     // --- Validations de base ---
     if (!cookId || guestCount === undefined) {
@@ -66,6 +66,16 @@ router.post('/checkout/create-session', async (req, res) => {
     }
     if (!eventDate) {
       return res.status(400).json({ error: 'Merci de choisir une date' });
+    }
+    // ⚠️ Vérification d'identité obligatoire de l'hôte (Stripe Identity).
+    // Revérifiée ici sur le serveur : ne jamais faire confiance à un état
+    // "vérifié" affiché uniquement côté navigateur.
+    if (!hostEmail) {
+      return res.status(400).json({ error: "L'email de l'hôte est requis" });
+    }
+    const hostVerification = await db.findHostVerificationByEmail(hostEmail);
+    if (!hostVerification || hostVerification.status !== 'verifie') {
+      return res.status(403).json({ error: "Merci de vérifier votre identité avant de réserver" });
     }
     const guests = parseInt(guestCount, 10);
     if (!Number.isInteger(guests) || guests < 1 || guests > 20) {
