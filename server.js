@@ -12,7 +12,12 @@ const app = express();
 // domaine) à appeler cette API depuis une origine différente. En
 // production, remplacez la valeur par défaut par votre domaine exact
 // (ex. 'https://atchef.fr') plutôt que de l'ouvrir à tout le monde.
-app.use(cors({ origin: process.env.APP_URL || '*' }));
+// ⚠️ PHASE DE TEST/DÉMO : on autorise toutes les origines pour éviter les
+// blocages liés à une correspondance exacte d'adresse (protocole, barre
+// oblique finale, etc.). Avant un vrai lancement public, remplacez cette
+// ligne par : cors({ origin: process.env.APP_URL }) avec votre vraie URL,
+// pour ne plus autoriser que votre propre site.
+app.use(cors());
 
 // ⚠️ ORDRE CRITIQUE DES MIDDLEWARES ⚠️
 // Le webhook Stripe a besoin du corps de requête BRUT (un Buffer non
