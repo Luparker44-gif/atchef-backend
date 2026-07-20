@@ -5,6 +5,7 @@ const cors = require('cors');
 const connectRoutes = require('./routes/connect');
 const checkoutRoutes = require('./routes/checkout');
 const adminRoutes = require('./routes/admin');
+const identityRoutes = require('./routes/identity');
 const stripeWebhookRoutes = require('./webhooks/stripeWebhook');
 
 const app = express();
@@ -33,6 +34,7 @@ app.use(express.json());
 app.use('/api', connectRoutes);
 app.use('/api', checkoutRoutes);
 app.use('/api', adminRoutes);
+app.use('/api', identityRoutes);
 
 app.get('/', (req, res) => {
   res.send("API At'Chef — paiements marketplace via Stripe Connect (Express).");
