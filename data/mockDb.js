@@ -59,7 +59,12 @@ let nextBookingId = 1;
 // qui existent AUSSI en dur dans le frontend (Amélie, Karim...). En partant de
 // 1000, un nouveau cuisinier inscrit via le formulaire ne peut jamais entrer en
 // collision avec un id déjà utilisé côté frontend (1 à 11).
-let nextNewCookId = 1000;
+// ⚠️ Ancien compteur simple retiré : il repartait à 1000 à chaque
+// redémarrage du serveur (le serveur gratuit s'endort après 15 min
+// d'inactivité), ce qui pouvait faire attribuer le MÊME identifiant à deux
+// cuisiniers différents inscrits à des moments différents. On utilise
+// désormais l'horodatage courant comme base : garanti unique, même après
+// un redémarrage.
 
 module.exports = {
   async findCookById(id) {
@@ -106,7 +111,7 @@ module.exports = {
   CUISINE_TYPES,
 
   async createCook(data) {
-    const id = nextNewCookId++;
+    const id = Date.now();
     const cook = {
       id,
       name: data.name,
