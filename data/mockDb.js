@@ -32,6 +32,7 @@ const cooks = new Map([
     name: 'Amélie R.',
     email: 'amelie.r@example.com',
     stripeAccountId: null,
+    identityVerified: false, // mis à jour automatiquement via le webhook account.updated
     formulas: [
       { id: 'f1', name: 'Menu Découverte', price: 25 },
       { id: 'f2', name: 'Menu Terroir Breton', price: 32 },
@@ -44,6 +45,7 @@ const cooks = new Map([
     name: 'Karim B.',
     email: 'karim.b@example.com',
     stripeAccountId: null,
+    identityVerified: false,
     formulas: [
       { id: 'f1', name: 'Menu Mezzé', price: 28 },
       { id: 'f2', name: 'Menu Fête', price: 38 },
@@ -56,6 +58,12 @@ const bookings = new Map();
 let nextBookingId = 1;
 
 const tickets = new Map(); // tickets de support (SAV)
+
+// Vérifications d'identité des HÔTES via Stripe Identity, indexées par
+// email (les hôtes n'ont pas de compte à proprement parler). Les
+// cuisiniers, eux, sont déjà vérifiés via Stripe Connect (champ
+// `identityVerified` directement sur leur fiche, voir plus haut).
+const hostVerifications = new Map();
 
 // ⚠️ Démarre à 1000 : les cuisiniers d'exemple ci-dessus utilisent les id 1 et 2,
 // qui existent AUSSI en dur dans le frontend (Amélie, Karim...). En partant de
@@ -121,6 +129,7 @@ module.exports = {
       cuisine: data.cuisine,
       location: data.location,
       stripeAccountId: null,
+      identityVerified: false, // mis à jour automatiquement via le webhook account.updated
       quote: data.bio
         ? data.bio.slice(0, 140)
         : `Nouveau sur At'Chef, hâte de vous régaler avec ma cuisine ${data.cuisine.toLowerCase()} !`,
@@ -182,5 +191,30 @@ module.exports = {
     if (!ticket) return null;
     Object.assign(ticket, patch);
     return ticket;
+  },
+
+  async createHostVerification(data) {
+    const record = {
+      email: data.email,
+      verificationSessionId: data.verificationSessionId,
+      status: data.status, // 'en_attente' | 'verifie' | 'echec'
+      updatedAt: new Date().toISOString(),
+    };
+    hostVerifications.set(data.email, record);
+    return record;
+  },
+
+  async findHostVerificationByEmail(email) {
+    return hostVerifications.get(email) || null;
+  },
+
+  async updateHostVerificationBySessionId(sessionId, patch) {
+    for (const record of hostVerifications.values()) {
+      if (record.verificationSessionId === sessionId) {
+        Object.assign(record, patch, { updatedAt: new Date().toISOString() });
+        return record;
+      }
+    }
+    return null;
   },
 };
