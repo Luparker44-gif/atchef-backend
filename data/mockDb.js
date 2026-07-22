@@ -31,6 +31,7 @@ const cooks = new Map([
     id: 1,
     name: 'Amélie R.',
     email: 'amelie.r@example.com',
+    passwordHash: null, // ces cuisiniers de démo n'ont pas de mot de passe défini
     stripeAccountId: null,
     identityVerified: false, // mis à jour automatiquement via le webhook account.updated
     formulas: [
@@ -44,6 +45,7 @@ const cooks = new Map([
     id: 2,
     name: 'Karim B.',
     email: 'karim.b@example.com',
+    passwordHash: null,
     stripeAccountId: null,
     identityVerified: false,
     formulas: [
@@ -60,10 +62,14 @@ let nextBookingId = 1;
 const tickets = new Map(); // tickets de support (SAV)
 
 // Vérifications d'identité des HÔTES via Stripe Identity, indexées par
-// email (les hôtes n'ont pas de compte à proprement parler). Les
-// cuisiniers, eux, sont déjà vérifiés via Stripe Connect (champ
+// email. Les cuisiniers, eux, sont déjà vérifiés via Stripe Connect (champ
 // `identityVerified` directement sur leur fiche, voir plus haut).
 const hostVerifications = new Map();
+
+// Comptes HÔTES (nom, email, mot de passe haché). Séparé de
+// hostVerifications par clarté : un hôte peut avoir un compte sans encore
+// avoir vérifié son identité, ou l'inverse selon l'ordre des étapes.
+const hosts = new Map(); // clé = email
 
 // ⚠️ Démarre à 1000 : les cuisiniers d'exemple ci-dessus utilisent les id 1 et 2,
 // qui existent AUSSI en dur dans le frontend (Amélie, Karim...). En partant de
@@ -91,6 +97,13 @@ module.exports = {
   async findCookByStripeAccountId(stripeAccountId) {
     for (const cook of cooks.values()) {
       if (cook.stripeAccountId === stripeAccountId) return cook;
+    }
+    return null;
+  },
+
+  async findCookByEmail(email) {
+    for (const cook of cooks.values()) {
+      if (cook.email === email) return cook;
     }
     return null;
   },
@@ -126,6 +139,7 @@ module.exports = {
       id,
       name: data.name,
       email: data.email,
+      passwordHash: data.passwordHash || null,
       cuisine: data.cuisine,
       location: data.location,
       stripeAccountId: null,
@@ -216,5 +230,28 @@ module.exports = {
       }
     }
     return null;
+  },
+
+  async createHost(data) {
+    const host = {
+      id: Date.now(),
+      name: data.name,
+      email: data.email,
+      passwordHash: data.passwordHash,
+      createdAt: new Date().toISOString(),
+    };
+    hosts.set(data.email, host);
+    return host;
+  },
+
+  async findHostByEmail(email) {
+    return hosts.get(email) || null;
+  },
+
+  async updateHost(email, patch) {
+    const host = hosts.get(email);
+    if (!host) return null;
+    Object.assign(host, patch);
+    return host;
   },
 };
