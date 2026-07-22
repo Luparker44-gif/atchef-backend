@@ -74,10 +74,13 @@ router.get('/admin/bookings', requireAdmin, async (req, res) => {
  * GET /api/admin/cooks — tous les cuisiniers, AVEC les champs privés
  * (email, identifiant Stripe). Contrairement à GET /api/cooks (public,
  * qui masque ces champs), cette route est réservée à l'administration.
+ * Le mot de passe haché, lui, n'est JAMAIS renvoyé, même ici : aucun
+ * usage légitime n'en a besoin côté frontend.
  */
 router.get('/admin/cooks', requireAdmin, async (req, res) => {
   const cooks = await db.getAllCooks();
-  res.json(cooks);
+  const sanitized = cooks.map(({ passwordHash, ...rest }) => rest);
+  res.json(sanitized);
 });
 
 /** GET /api/admin/tickets — tous les tickets de support, plus récents en premier. */
