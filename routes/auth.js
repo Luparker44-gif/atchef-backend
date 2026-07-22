@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const db = require('../data/mockDb');
+const { sendPasswordResetEmail } = require('../services/email');
 
 // ⚠️ Séparé de ADMIN_JWT_SECRET par principe : un compte hôte/cuisinier
 // compromis ne doit jamais permettre de forger un jeton admin, et
@@ -146,4 +148,123 @@ router.get('/my/profile', requireAuth, async (req, res) => {
   res.json({ role: 'host', ...publicFields });
 });
 
+/**
+ * ============================================================================
+ * POST /api/auth/forgot-password
+ * ============================================================================
+ * Génère un jeton de réinitialisation à usage unique (valable 1 heure) et
+ * envoie un email avec un lien. Répond TOUJOURS avec le même message,
+ * que l'email existe ou non : ne jamais révéler si une adresse a un
+ * compte, pour ne pas faciliter le harcèlement/la reconnaissance de comptes.
+ * ============================================================================
+ */
+router.post('/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email requis' });
+
+    const genericMessage = { message: 'Si un compte existe avec cet email, un lien de réinitialisation vient de lui être envoyé.' };
+
+    const host = await db.findHostByEmail(email);
+    const cook = host ? null : await db.findCookByEmail(email);
+    const account = host || cook;
+    if (!account) return res.json(genericMessage); // même réponse, compte introuvable ou non
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = Date.now() + 60 * 60 * 1000; // 1 heure
+
+    if (host) {
+      await db.updateHost(email, { resetToken, resetTokenExpiry });
+    } else {
+      await db.updateCook(cook.id, { resetToken, resetTokenExpiry });
+    }
+
+    await sendPasswordResetEmail(email, resetToken);
+    res.json(genericMessage);
+  } catch (err) {
+    console.error('Erreur mot de passe oublié :', err);
+    res.status(500).json({ error: 'Une erreur est survenue' });
+  }
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Vérifie le jeton reçu par email (et sa date d'expiration), puis
+ * remplace le mot de passe par le nouveau, haché avec bcrypt.
+ */
+router.post('/auth/reset-password', async (req, res) => {
+  try {
+    const { email, token, newPassword } = req.body;
+    if (!email || !token || !newPassword) {
+      return res.status(400).json({ error: 'Requête incomplète' });
+    }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caractères' });
+    }
+
+    const host = await db.findHostByEmail(email);
+    const cook = host ? null : await db.findCookByEmail(email);
+    const account = host || cook;
+
+    if (!account || account.resetToken !== token || !account.resetTokenExpiry || Date.now() > account.resetTokenExpiry) {
+      return res.status(400).json({ error: 'Lien invalide ou expiré, merci de refaire une demande' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    if (host) {
+      await db.updateHost(email, { passwordHash, resetToken: null, resetTokenExpiry: null });
+    } else {
+      await db.updateCook(cook.id, { passwordHash, resetToken: null, resetTokenExpiry: null });
+    }
+
+    res.json({ message: 'Mot de passe mis à jour, vous pouvez maintenant vous connecter.' });
+  } catch (err) {
+    console.error('Erreur réinitialisation mot de passe :', err);
+    res.status(500).json({ error: 'Une erreur est survenue' });
+  }
+});
+
+/**
+ * PATCH /api/my/profile
+ * Réservé aux CUISINIERS connectés : permet de modifier sa bio, sa
+ * spécialité, sa localisation et ses formules après l'inscription
+ * (impossible à faire jusqu'ici, une fois le formulaire initial soumis).
+ */
+router.patch('/my/profile', requireAuth, async (req, res) => {
+  if (req.user.role !== 'cook') {
+    return res.status(403).json({ error: 'Réservé aux cuisiniers' });
+  }
+  const { bio, specialties, location, formulas } = req.body;
+  const patch = {};
+
+  if (bio !== undefined) patch.bio = String(bio).trim().slice(0, 1000);
+  if (location !== undefined) patch.location = String(location).trim();
+  if (Array.isArray(specialties)) patch.specialties = specialties.map(s => String(s).trim()).filter(Boolean);
+
+  if (Array.isArray(formulas)) {
+    // On revalide chaque formule côté serveur plutôt que de faire confiance
+    // au tableau reçu tel quel (même logique de prudence que pour les prix
+    // au moment du paiement, voir routes/checkout.js).
+    const cleanFormulas = formulas
+      .filter(f => f && f.name && f.price !== undefined)
+      .map((f, i) => ({
+        id: f.id || `f${i + 1}`,
+        name: String(f.name).trim().slice(0, 80),
+        price: Math.max(1, Math.min(500, parseFloat(f.price) || 0)),
+        description: f.description ? String(f.description).trim().slice(0, 300) : '',
+        includes: Array.isArray(f.includes) ? f.includes.map(x => String(x).trim()).slice(0, 10) : [],
+      }));
+    if (!cleanFormulas.length) {
+      return res.status(400).json({ error: 'Merci de garder au moins une formule valide' });
+    }
+    patch.formulas = cleanFormulas;
+  }
+
+  const updated = await db.updateCook(req.user.id, patch);
+  if (!updated) return res.status(404).json({ error: 'Profil introuvable' });
+  const { passwordHash, ...publicFields } = updated;
+  res.json({ role: 'cook', ...publicFields });
+});
+
 module.exports = router;
+module.exports.requireAuth = requireAuth;
