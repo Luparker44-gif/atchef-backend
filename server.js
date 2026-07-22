@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const db = require('./data/mockDb');
 
 const connectRoutes = require('./routes/connect');
 const checkoutRoutes = require('./routes/checkout');
@@ -43,8 +44,21 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 4242;
-app.listen(PORT, () => {
-  console.log(`✅ Serveur At'Chef démarré sur http://localhost:${PORT}`);
-});
+
+// On initialise la base de données (création des tables si elles
+// n'existent pas encore, insertion des cuisiniers de démo) AVANT
+// d'accepter la moindre requête HTTP. Si la connexion à la base échoue
+// (mauvais DATABASE_URL, base injoignable...), le serveur s'arrête
+// immédiatement avec un message clair plutôt que de tourner "à moitié".
+db.initSchema()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`✅ Serveur At'Chef démarré sur http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('❌ Impossible de se connecter à la base de données (vérifiez DATABASE_URL) :', err.message);
+    process.exit(1);
+  });
 
 module.exports = app;
