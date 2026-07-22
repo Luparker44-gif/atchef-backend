@@ -140,6 +140,7 @@ router.post('/checkout/create-session', async (req, res) => {
       guestCount: guests,
       allergies: String(allergies).trim(),
       eventDate: eventDate || null,
+      hostEmail: String(hostEmail).trim(), // permet à l'hôte connecté de retrouver cette réservation dans "Mon espace"
       totalAmountInCents,
       applicationFeeAmount,
     });
