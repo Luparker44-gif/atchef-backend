@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const db = require('../data/mockDb');
+
+const USER_JWT_SECRET = process.env.USER_JWT_SECRET || 'dev-secret-utilisateur-a-changer-absolument';
 
 /**
  * ============================================================================
@@ -154,13 +158,16 @@ router.get('/cooks/:cookId/stripe-status', async (req, res) => {
  */
 router.post('/cooks/register', async (req, res) => {
   try {
-    const { name, email, cuisine, location, specialty, bio, formulaName, formulaPrice } = req.body;
+    const { name, email, password, cuisine, location, specialty, bio, formulaName, formulaPrice } = req.body;
 
-    if (!name || !email || !cuisine || !location || !specialty || !formulaName || formulaPrice === undefined) {
+    if (!name || !email || !password || !cuisine || !location || !specialty || !formulaName || formulaPrice === undefined) {
       return res.status(400).json({ error: 'Merci de remplir tous les champs obligatoires.' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Adresse email invalide.' });
+    }
+    if (String(password).length < 8) {
+      return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caractères.' });
     }
     if (!db.CUISINE_TYPES.includes(cuisine)) {
       return res.status(400).json({ error: 'Type de cuisine invalide.' });
@@ -169,10 +176,19 @@ router.post('/cooks/register', async (req, res) => {
     if (!Number.isFinite(price) || price <= 0 || price > 500) {
       return res.status(400).json({ error: 'Prix de formule invalide.' });
     }
+    const existingCook = await db.findCookByEmail(email);
+    if (existingCook) {
+      return res.status(409).json({ error: 'Un compte cuisinier existe déjà avec cet email.' });
+    }
+
+    // Le mot de passe est haché avec bcrypt avant stockage — jamais
+    // conservé en clair, même dans cette base de démonstration en mémoire.
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const cook = await db.createCook({
       name: String(name).trim(),
       email: String(email).trim(),
+      passwordHash,
       cuisine,
       location: String(location).trim(),
       specialty: String(specialty).trim(),
@@ -181,7 +197,11 @@ router.post('/cooks/register', async (req, res) => {
       formulaPrice: price,
     });
 
-    res.json({ cookId: cook.id });
+    // Le cuisinier est connecté automatiquement dès son inscription : pas
+    // besoin de se reconnecter juste après avoir créé son compte.
+    const token = jwt.sign({ role: 'cook', email: cook.email, id: cook.id, name: cook.name }, USER_JWT_SECRET, { expiresIn: '30d' });
+
+    res.json({ cookId: cook.id, token });
   } catch (err) {
     console.error('Erreur inscription cuisinier :', err);
     res.status(500).json({ error: "Impossible de créer votre profil pour le moment" });
@@ -209,7 +229,7 @@ router.post('/cooks/register', async (req, res) => {
 router.get('/cooks', async (req, res) => {
   try {
     const allCooks = await db.getAllCooks();
-    const publicCooks = allCooks.map(({ email, stripeAccountId, ...publicFields }) => publicFields);
+    const publicCooks = allCooks.map(({ email, stripeAccountId, passwordHash, ...publicFields }) => publicFields);
     res.json(publicCooks);
   } catch (err) {
     console.error('Erreur récupération des cuisiniers :', err);
