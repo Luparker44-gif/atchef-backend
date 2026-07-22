@@ -21,12 +21,17 @@
 
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// ⚠️ La librairie Resend lève une erreur DÈS SA CRÉATION si aucune clé API
+// n'est fournie — on ne l'instancie donc que si une vraie clé est
+// présente, pour ne jamais empêcher le serveur de démarrer tant que vous
+// n'avez pas encore configuré Resend (les emails sont alors simplement
+// ignorés, voir safeSend ci-dessous).
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const FROM_EMAIL = process.env.EMAIL_FROM || "At'Chef <onboarding@resend.dev>";
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
 
 async function safeSend(payload, label) {
-  if (!process.env.RESEND_API_KEY) {
+  if (!resend) {
     console.warn(`⚠️ RESEND_API_KEY absente : email "${label}" non envoyé (fonctionnement normal si vous n'avez pas encore configuré Resend).`);
     return;
   }
