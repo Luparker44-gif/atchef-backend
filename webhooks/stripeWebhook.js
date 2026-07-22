@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../data/mockDb');
+const { sendBookingConfirmationToHost, sendBookingConfirmationToCook } = require('../services/email');
 
 /**
  * ============================================================================
@@ -43,12 +44,21 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
       // Le paiement a réussi : c'est LE moment où la réservation devient réelle.
       const session = event.data.object;
       const bookingId = session.metadata.bookingId; // posé lors de la création de la session
-      await db.updateBooking(bookingId, {
+      const booking = await db.updateBooking(bookingId, {
         status: 'confirmed',
         stripePaymentIntentId: session.payment_intent,
       });
       console.log(`✅ Réservation #${bookingId} confirmée et payée.`);
-      // TODO : notifier le cuisinier + l'hôte (email/SMS/notification push)
+
+      // Notification par email — n'empêche jamais la confirmation de la
+      // réservation elle-même si l'envoi échoue (voir services/email.js).
+      if (booking) {
+        const cook = await db.findCookById(booking.cookId);
+        if (cook) {
+          await sendBookingConfirmationToHost(booking, cook);
+          await sendBookingConfirmationToCook(booking, cook);
+        }
+      }
       break;
     }
 
