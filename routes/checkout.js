@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../data/mockDb');
+const { requireAuth } = require('./auth');
 
 // At'Chef prélève 10 % de commission sur chaque réservation.
 // Centralisé ici pour ne jamais désynchroniser la logique de calcul.
@@ -207,6 +208,75 @@ router.post('/checkout/create-session', async (req, res) => {
 });
 
 module.exports = router;
+
+/**
+ * ============================================================================
+ * POST /api/bookings/:id/cancel
+ * ============================================================================
+ * Annulation d'une réservation par l'HÔTE qui l'a effectuée, avec
+ * remboursement automatique selon la politique d'annulation d'At'Chef
+ * (voir politique-annulation-atchef.md) :
+ * - Gratuit (100% remboursé) jusqu'à J-3 avant l'événement
+ * - 50% remboursé entre J-2 et J-1
+ * - 0% remboursé à moins de 24h de l'événement
+ *
+ * Le remboursement utilise `reverse_transfer` et `refund_application_fee`
+ * pour récupérer PROPORTIONNELLEMENT la part déjà transférée au cuisinier
+ * et notre propre commission — sans ça, un remboursement partiel
+ * laisserait le cuisinier ou la plateforme avec un montant incohérent.
+ * ============================================================================
+ */
+router.post('/bookings/:id/cancel', requireAuth, async (req, res) => {
+  try {
+    const booking = await db.findBookingById(req.params.id);
+    if (!booking) return res.status(404).json({ error: 'Réservation introuvable' });
+
+    if (req.user.role !== 'host' || booking.hostEmail !== req.user.email) {
+      return res.status(403).json({ error: "Vous n'êtes pas autorisé à annuler cette réservation" });
+    }
+    if (booking.status !== 'confirmed') {
+      return res.status(400).json({ error: 'Seule une réservation payée et confirmée peut être annulée' });
+    }
+    if (!booking.eventDate) {
+      return res.status(400).json({ error: "Impossible de déterminer la date de l'événement pour cette réservation" });
+    }
+
+    const eventDate = new Date(booking.eventDate);
+    const now = new Date();
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const daysUntilEvent = Math.ceil((eventDate - now) / msPerDay);
+
+    let refundPercent;
+    if (daysUntilEvent >= 3) refundPercent = 1;
+    else if (daysUntilEvent >= 1) refundPercent = 0.5;
+    else refundPercent = 0;
+
+    const refundAmountInCents = Math.round((booking.totalAmountInCents || 0) * refundPercent);
+
+    if (refundAmountInCents > 0) {
+      if (!booking.stripePaymentIntentId) {
+        return res.status(400).json({ error: 'Référence de paiement introuvable, contactez le support' });
+      }
+      await stripe.refunds.create({
+        payment_intent: booking.stripePaymentIntentId,
+        amount: refundAmountInCents,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      });
+    }
+
+    const updated = await db.updateBooking(booking.id, {
+      status: 'cancelled',
+      refundPercent: Math.round(refundPercent * 100),
+      cancelledAt: new Date().toISOString(),
+    });
+
+    res.json({ booking: updated, refundPercent: Math.round(refundPercent * 100) });
+  } catch (err) {
+    console.error('Erreur annulation réservation :', err);
+    res.status(500).json({ error: "Impossible d'annuler cette réservation pour le moment" });
+  }
+});
 
 /* ============================================================================
    CÂBLAGE AVEC LE BOUTON "RÉSERVER" DU FRONTEND (atchef-landing-page.html)
