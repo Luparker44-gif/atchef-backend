@@ -74,6 +74,14 @@ async function initSchema() {
       data JSONB NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id BIGINT PRIMARY KEY,
+      host_email TEXT,
+      cook_id BIGINT,
+      data JSONB NOT NULL
+    )
+  `);
 
   const existing = await pool.query('SELECT id FROM cooks WHERE id IN (1, 2)');
   const existingIds = existing.rows.map((r) => Number(r.id));
@@ -305,5 +313,70 @@ module.exports = {
     const updated = { ...current, ...patch };
     await pool.query('UPDATE hosts SET data = $1 WHERE email = $2', [JSON.stringify(updated), email]);
     return updated;
+  },
+
+  /**
+   * Une conversation est identifiée par la PAIRE (hostEmail, cookId) — pas
+   * besoin d'être passé par une réservation pour se parler (ex. poser une
+   * question avant de réserver).
+   */
+  async findConversationByPair(hostEmail, cookId) {
+    const res = await pool.query(
+      'SELECT data FROM conversations WHERE host_email = $1 AND cook_id = $2',
+      [hostEmail, Number(cookId)]
+    );
+    return res.rows[0] ? res.rows[0].data : null;
+  },
+
+  async findConversationById(id) {
+    const res = await pool.query('SELECT data FROM conversations WHERE id = $1', [Number(id)]);
+    return res.rows[0] ? res.rows[0].data : null;
+  },
+
+  async createConversation(data) {
+    const id = Date.now();
+    const conversation = {
+      id,
+      hostEmail: data.hostEmail,
+      cookId: Number(data.cookId),
+      hostName: data.hostName || '',
+      cookName: data.cookName || '',
+      messages: [],
+      updatedAt: new Date().toISOString(),
+    };
+    await pool.query(
+      'INSERT INTO conversations (id, host_email, cook_id, data) VALUES ($1,$2,$3,$4)',
+      [id, conversation.hostEmail, conversation.cookId, JSON.stringify(conversation)]
+    );
+    return conversation;
+  },
+
+  async addMessageToConversation(id, sender, text) {
+    const current = await this.findConversationById(id);
+    if (!current) return null;
+    const message = { sender, text, createdAt: new Date().toISOString() };
+    const updated = {
+      ...current,
+      messages: [...current.messages, message],
+      updatedAt: message.createdAt,
+    };
+    await pool.query('UPDATE conversations SET data = $1 WHERE id = $2', [JSON.stringify(updated), Number(id)]);
+    return updated;
+  },
+
+  async getConversationsForHost(hostEmail) {
+    const res = await pool.query(
+      `SELECT data FROM conversations WHERE host_email = $1 ORDER BY (data->>'updatedAt') DESC`,
+      [hostEmail]
+    );
+    return res.rows.map((r) => r.data);
+  },
+
+  async getConversationsForCook(cookId) {
+    const res = await pool.query(
+      `SELECT data FROM conversations WHERE cook_id = $1 ORDER BY (data->>'updatedAt') DESC`,
+      [Number(cookId)]
+    );
+    return res.rows.map((r) => r.data);
   },
 };
