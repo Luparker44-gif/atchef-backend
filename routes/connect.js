@@ -4,6 +4,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('../data/mockDb');
+const { geocodeLocation } = require('./geo');
 
 const USER_JWT_SECRET = process.env.USER_JWT_SECRET || 'dev-secret-utilisateur-a-changer-absolument';
 
@@ -185,12 +186,27 @@ router.post('/cooks/register', async (req, res) => {
     // conservé en clair, même dans cette base de démonstration en mémoire.
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Géocodage du lieu saisi (ex. "Chantenay, Nantes") en coordonnées GPS,
+    // nécessaires pour la recherche par rayon géographique. Si le
+    // géocodage échoue (service indisponible, lieu mal formulé...),
+    // l'inscription continue quand même : le cuisinier sera juste absent
+    // des recherches par rayon tant qu'il n'aura pas précisé un lieu
+    // reconnu, mais tout le reste fonctionne normalement.
+    let coords = null;
+    try {
+      coords = await geocodeLocation(`${location}, Nantes, France`);
+    } catch (geoErr) {
+      console.warn('Géocodage indisponible pour', location, ':', geoErr.message);
+    }
+
     const cook = await db.createCook({
       name: String(name).trim(),
       email: String(email).trim(),
       passwordHash,
       cuisine,
       location: String(location).trim(),
+      lat: coords ? coords.lat : null,
+      lng: coords ? coords.lng : null,
       specialty: String(specialty).trim(),
       bio: bio ? String(bio).trim() : '',
       formulaName: String(formulaName).trim(),
