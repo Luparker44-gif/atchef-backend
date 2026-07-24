@@ -266,5 +266,28 @@ router.patch('/my/profile', requireAuth, async (req, res) => {
   res.json({ role: 'cook', ...publicFields });
 });
 
+/**
+ * PATCH /api/my/availability
+ * Réservé aux CUISINIERS connectés : remplace la liste complète des
+ * jours marqués indisponibles (le calendrier du site renvoie la liste à
+ * jour à chaque modification, plutôt que de gérer un ajout/retrait unitaire
+ * côté serveur — plus simple et tout aussi fiable ici).
+ */
+router.patch('/my/availability', requireAuth, async (req, res) => {
+  if (req.user.role !== 'cook') {
+    return res.status(403).json({ error: 'Réservé aux cuisiniers' });
+  }
+  const { unavailableDates } = req.body;
+  if (!Array.isArray(unavailableDates)) {
+    return res.status(400).json({ error: 'unavailableDates doit être une liste de dates' });
+  }
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  const cleanDates = unavailableDates.filter(d => typeof d === 'string' && dateRegex.test(d));
+
+  const updated = await db.updateCook(req.user.id, { unavailableDates: cleanDates });
+  if (!updated) return res.status(404).json({ error: 'Profil introuvable' });
+  res.json({ unavailableDates: updated.unavailableDates });
+});
+
 module.exports = router;
 module.exports.requireAuth = requireAuth;
