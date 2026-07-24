@@ -253,4 +253,32 @@ router.get('/cooks', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/cooks/:cookId/availability
+ * PUBLIC — utilisée par le calendrier de réservation sur le profil du
+ * cuisinier. Combine deux sources : les jours que le cuisinier a
+ * manuellement marqués indisponibles, et les jours où il a déjà une
+ * réservation CONFIRMÉE (payée) — un cuisinier ne peut assurer qu'un seul
+ * repas par jour. Les réservations "en attente de paiement" ne bloquent
+ * pas un jour, pour éviter qu'un paiement abandonné ne le bloque
+ * indéfiniment.
+ */
+router.get('/cooks/:cookId/availability', async (req, res) => {
+  try {
+    const cook = await db.findCookById(req.params.cookId);
+    if (!cook) return res.status(404).json({ error: 'Cuisinier introuvable' });
+
+    const allBookings = await db.getAllBookings();
+    const bookedDates = allBookings
+      .filter(b => String(b.cookId) === String(cook.id) && b.status === 'confirmed' && b.eventDate)
+      .map(b => b.eventDate);
+
+    const unavailableDates = Array.from(new Set([...(cook.unavailableDates || []), ...bookedDates]));
+    res.json({ unavailableDates });
+  } catch (err) {
+    console.error('Erreur récupération disponibilité :', err);
+    res.status(500).json({ error: 'Impossible de récupérer la disponibilité' });
+  }
+});
+
 module.exports = router;
