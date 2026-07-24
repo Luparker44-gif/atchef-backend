@@ -81,6 +81,7 @@ async function initSchema() {
   if (!existingIds.includes(1)) {
     const amelie = {
       id: 1, name: 'Amélie R.', email: 'amelie.r@example.com', passwordHash: null,
+      lat: 47.2184, lng: -1.5536,
       stripeAccountId: null, identityVerified: false,
       formulas: [
         { id: 'f1', name: 'Menu Découverte', price: 25 },
@@ -96,6 +97,7 @@ async function initSchema() {
   if (!existingIds.includes(2)) {
     const karim = {
       id: 2, name: 'Karim B.', email: 'karim.b@example.com', passwordHash: null,
+      lat: 47.2065, lng: -1.5490,
       stripeAccountId: null, identityVerified: false,
       formulas: [
         { id: 'f1', name: 'Menu Mezzé', price: 28 },
@@ -149,6 +151,8 @@ module.exports = {
       passwordHash: data.passwordHash || null,
       cuisine: data.cuisine,
       location: data.location,
+      lat: typeof data.lat === 'number' ? data.lat : null,
+      lng: typeof data.lng === 'number' ? data.lng : null,
       stripeAccountId: null,
       identityVerified: false,
       quote: data.bio
