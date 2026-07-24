@@ -161,6 +161,7 @@ module.exports = {
       location: data.location,
       lat: typeof data.lat === 'number' ? data.lat : null,
       lng: typeof data.lng === 'number' ? data.lng : null,
+      unavailableDates: [],
       stripeAccountId: null,
       identityVerified: false,
       quote: data.bio
