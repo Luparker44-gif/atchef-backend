@@ -115,7 +115,7 @@ router.patch('/admin/tickets/:id', requireAdmin, async (req, res) => {
  * ============================================================================
  */
 router.post('/tickets', async (req, res) => {
-  const { name, email, role, subject, message } = req.body;
+  const { name, email, role, subject, message, priority, bookingId } = req.body;
   if (!name || !email || !subject || !message) {
     return res.status(400).json({ error: 'Merci de remplir tous les champs obligatoires' });
   }
@@ -125,6 +125,8 @@ router.post('/tickets', async (req, res) => {
     role: role || 'non précisé',
     subject: String(subject).trim(),
     message: String(message).trim(),
+    priority: priority === 'urgent' ? 'urgent' : 'normal',
+    bookingId: bookingId || null,
   });
   res.json({ ticketId: ticket.id });
 });
