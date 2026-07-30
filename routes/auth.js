@@ -123,9 +123,27 @@ router.post('/auth/login', async (req, res) => {
  */
 router.get('/my/bookings', requireAuth, async (req, res) => {
   const allBookings = await db.getAllBookings();
-  const filtered = req.user.role === 'cook'
+  let filtered = req.user.role === 'cook'
     ? allBookings.filter(b => String(b.cookId) === String(req.user.id))
     : allBookings.filter(b => b.hostEmail === req.user.email);
+
+  // Pour un cuisinier : on ajoute la réputation de l'hôte (avis laissés par
+  // d'autres cuisiniers), pour qu'il puisse voir en un coup d'œil si un
+  // hôte a déjà posé problème par le passé — avant même de préparer le repas.
+  if (req.user.role === 'cook') {
+    const hostReviewsCache = {};
+    filtered = await Promise.all(filtered.map(async (b) => {
+      if (!hostReviewsCache[b.hostEmail]) {
+        hostReviewsCache[b.hostEmail] = await db.getReviewsForHost(b.hostEmail);
+      }
+      const hostReviews = hostReviewsCache[b.hostEmail];
+      const hostRating = hostReviews.length
+        ? Math.round((hostReviews.reduce((s, r) => s + r.rating, 0) / hostReviews.length) * 10) / 10
+        : null;
+      return { ...b, hostRating, hostReviewsCount: hostReviews.length };
+    }));
+  }
+
   res.json(filtered);
 });
 
@@ -234,12 +252,26 @@ router.patch('/my/profile', requireAuth, async (req, res) => {
   if (req.user.role !== 'cook') {
     return res.status(403).json({ error: 'Réservé aux cuisiniers' });
   }
-  const { bio, specialties, location, formulas } = req.body;
+  const { bio, specialties, location, formulas, dishPhotos } = req.body;
   const patch = {};
 
   if (bio !== undefined) patch.bio = String(bio).trim().slice(0, 1000);
   if (location !== undefined) patch.location = String(location).trim();
   if (Array.isArray(specialties)) patch.specialties = specialties.map(s => String(s).trim()).filter(Boolean);
+
+  if (Array.isArray(dishPhotos)) {
+    // Validation basique de chaque URL (doit commencer par http:// ou
+    // https://) — on ne va pas chercher à vérifier que l'image existe
+    // vraiment, juste éviter d'enregistrer n'importe quel texte comme URL.
+    const cleanPhotos = dishPhotos
+      .filter(p => p && typeof p.url === 'string' && /^https?:\/\//.test(p.url.trim()))
+      .slice(0, 12) // maximum 12 photos, pour rester raisonnable
+      .map(p => ({
+        url: p.url.trim().slice(0, 500),
+        caption: p.caption ? String(p.caption).trim().slice(0, 140) : '',
+      }));
+    patch.dishPhotos = cleanPhotos;
+  }
 
   if (Array.isArray(formulas)) {
     // On revalide chaque formule côté serveur plutôt que de faire confiance
