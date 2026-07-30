@@ -82,6 +82,14 @@ async function initSchema() {
       data JSONB NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id BIGINT PRIMARY KEY,
+      booking_id BIGINT,
+      rater_role TEXT,
+      data JSONB NOT NULL
+    )
+  `);
 
   const existing = await pool.query('SELECT id FROM cooks WHERE id IN (1, 2)');
   const existingIds = existing.rows.map((r) => Number(r.id));
@@ -162,6 +170,7 @@ module.exports = {
       lat: typeof data.lat === 'number' ? data.lat : null,
       lng: typeof data.lng === 'number' ? data.lng : null,
       unavailableDates: [],
+      dishPhotos: [],
       stripeAccountId: null,
       identityVerified: false,
       quote: data.bio
@@ -234,6 +243,8 @@ module.exports = {
       role: data.role || 'non précisé',
       subject: data.subject,
       message: data.message,
+      priority: data.priority === 'urgent' ? 'urgent' : 'normal',
+      bookingId: data.bookingId || null,
       status: 'ouvert',
       adminNote: '',
       createdAt: new Date().toISOString(),
@@ -244,7 +255,13 @@ module.exports = {
 
   async getAllTickets() {
     const res = await pool.query('SELECT data FROM tickets ORDER BY id DESC');
-    return res.rows.map((r) => r.data);
+    const tickets = res.rows.map((r) => r.data);
+    // Les tickets urgents remontent toujours en premier, quelle que soit leur date.
+    return tickets.sort((a, b) => {
+      if (a.priority === 'urgent' && b.priority !== 'urgent') return -1;
+      if (a.priority !== 'urgent' && b.priority === 'urgent') return 1;
+      return 0; // conserve l'ordre "plus récent d'abord" déjà établi par la requête SQL
+    });
   },
 
   async findTicketById(id) {
@@ -377,6 +394,57 @@ module.exports = {
     const res = await pool.query(
       `SELECT data FROM conversations WHERE cook_id = $1 ORDER BY (data->>'updatedAt') DESC`,
       [Number(cookId)]
+    );
+    return res.rows.map((r) => r.data);
+  },
+
+  /**
+   * Système d'avis À DOUBLE SENS : un hôte note le cuisinier après le
+   * repas, mais le cuisinier note aussi l'hôte — c'est ce deuxième sens,
+   * absent jusqu'ici, qui permet de repérer un hôte qui se comporterait
+   * mal avant qu'un autre cuisinier n'accepte sa prochaine réservation.
+   */
+  async findReviewByBookingAndRater(bookingId, raterRole) {
+    const res = await pool.query(
+      'SELECT data FROM reviews WHERE booking_id = $1 AND rater_role = $2',
+      [Number(bookingId), raterRole]
+    );
+    return res.rows[0] ? res.rows[0].data : null;
+  },
+
+  async createReview(data) {
+    const id = Date.now();
+    const review = {
+      id,
+      bookingId: data.bookingId,
+      raterRole: data.raterRole, // 'host' note le cuisinier, 'cook' note l'hôte
+      cookId: data.cookId,
+      hostEmail: data.hostEmail,
+      rating: data.rating,
+      comment: data.comment || '',
+      createdAt: new Date().toISOString(),
+    };
+    await pool.query(
+      'INSERT INTO reviews (id, booking_id, rater_role, data) VALUES ($1,$2,$3,$4)',
+      [id, review.bookingId, review.raterRole, JSON.stringify(review)]
+    );
+    return review;
+  },
+
+  /** Avis reçus par un CUISINIER (déposés par des hôtes) — affichés publiquement sur son profil. */
+  async getReviewsForCook(cookId) {
+    const res = await pool.query(
+      `SELECT data FROM reviews WHERE (data->>'cookId')::bigint = $1 AND rater_role = 'host' ORDER BY (data->>'createdAt') DESC`,
+      [Number(cookId)]
+    );
+    return res.rows.map((r) => r.data);
+  },
+
+  /** Avis reçus par un HÔTE (déposés par des cuisiniers) — jamais publics, utilisés uniquement pour alerter un futur cuisinier. */
+  async getReviewsForHost(hostEmail) {
+    const res = await pool.query(
+      `SELECT data FROM reviews WHERE data->>'hostEmail' = $1 AND rater_role = 'cook' ORDER BY (data->>'createdAt') DESC`,
+      [hostEmail]
     );
     return res.rows.map((r) => r.data);
   },
