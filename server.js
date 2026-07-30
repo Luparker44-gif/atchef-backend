@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const db = require('./data/mockDb');
+const { ensureBucketExists } = require('./services/storage');
 
 const connectRoutes = require('./routes/connect');
 const checkoutRoutes = require('./routes/checkout');
@@ -10,6 +11,8 @@ const identityRoutes = require('./routes/identity');
 const authRoutes = require('./routes/auth');
 const geoRoutes = require('./routes/geo');
 const messagesRoutes = require('./routes/messages');
+const photosRoutes = require('./routes/photos');
+const reviewsRoutes = require('./routes/reviews');
 const stripeWebhookRoutes = require('./webhooks/stripeWebhook');
 
 const app = express();
@@ -42,6 +45,8 @@ app.use('/api', identityRoutes);
 app.use('/api', authRoutes);
 app.use('/api', geoRoutes);
 app.use('/api', messagesRoutes);
+app.use('/api', photosRoutes);
+app.use('/api', reviewsRoutes);
 
 app.get('/', (req, res) => {
   res.send("API At'Chef — paiements marketplace via Stripe Connect (Express).");
@@ -55,6 +60,7 @@ const PORT = process.env.PORT || 4242;
 // (mauvais DATABASE_URL, base injoignable...), le serveur s'arrête
 // immédiatement avec un message clair plutôt que de tourner "à moitié".
 db.initSchema()
+  .then(() => ensureBucketExists())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`✅ Serveur At'Chef démarré sur http://localhost:${PORT}`);
