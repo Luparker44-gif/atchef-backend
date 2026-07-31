@@ -83,6 +83,12 @@ router.get('/admin/cooks', requireAdmin, async (req, res) => {
   res.json(sanitized);
 });
 
+/** DELETE /api/admin/cooks/:id — supprime définitivement un cuisinier. */
+router.delete('/admin/cooks/:id', requireAdmin, async (req, res) => {
+  await db.deleteCook(req.params.id);
+  res.json({ deleted: true });
+});
+
 /** GET /api/admin/tickets — tous les tickets de support, plus récents en premier. */
 router.get('/admin/tickets', requireAdmin, async (req, res) => {
   const tickets = await db.getAllTickets();
