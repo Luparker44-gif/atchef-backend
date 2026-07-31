@@ -148,6 +148,11 @@ module.exports = {
     return updated;
   },
 
+  async deleteCook(id) {
+    await pool.query('DELETE FROM cooks WHERE id = $1', [Number(id)]);
+    return true;
+  },
+
   async findCookByStripeAccountId(stripeAccountId) {
     const res = await pool.query('SELECT data FROM cooks WHERE stripe_account_id = $1', [stripeAccountId]);
     return res.rows[0] ? res.rows[0].data : null;
