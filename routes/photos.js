@@ -54,4 +54,28 @@ router.delete('/my/dish-photos/:index', requireAuth, async (req, res) => {
   res.json({ dishPhotos: updated.dishPhotos });
 });
 
-module.exports = router;
+module.exports = router;/**
+ * POST /api/my/profile-photo
+ * Réservé aux cuisiniers : remplace leur photo de profil (une seule
+ * photo, contrairement au feed qui en accepte plusieurs).
+ */
+router.post('/my/profile-photo', requireAuth, upload.single('photo'), async (req, res) => {
+  if (req.user.role !== 'cook') {
+    return res.status(403).json({ error: 'Réservé aux cuisiniers' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'Aucune image reçue' });
+  }
+  if (!ALLOWED_MIME_TYPES.includes(req.file.mimetype)) {
+    return res.status(400).json({ error: "Format d'image non supporté (JPEG, PNG ou WebP uniquement)" });
+  }
+
+  try {
+    const url = await uploadDishPhoto(req.user.id, req.file.buffer, req.file.mimetype, req.file.originalname);
+    const updated = await db.updateCook(req.user.id, { photo: url });
+    res.json({ photo: updated.photo });
+  } catch (err) {
+    console.error('Erreur envoi photo de profil :', err.message);
+    res.status(500).json({ error: err.message || "Impossible d'envoyer cette photo pour le moment" });
+  }
+});
