@@ -89,6 +89,19 @@ router.delete('/admin/cooks/:id', requireAdmin, async (req, res) => {
   res.json({ deleted: true });
 });
 
+/** GET /api/admin/hosts — tous les comptes hôtes. */
+router.get('/admin/hosts', requireAdmin, async (req, res) => {
+  const hosts = await db.getAllHosts();
+  const sanitized = hosts.map(({ passwordHash, ...rest }) => rest);
+  res.json(sanitized);
+});
+
+/** DELETE /api/admin/hosts/:email — supprime définitivement un compte hôte. */
+router.delete('/admin/hosts/:email', requireAdmin, async (req, res) => {
+  await db.deleteHost(decodeURIComponent(req.params.email));
+  res.json({ deleted: true });
+});
+
 /** GET /api/admin/tickets — tous les tickets de support, plus récents en premier. */
 router.get('/admin/tickets', requireAdmin, async (req, res) => {
   const tickets = await db.getAllTickets();
