@@ -330,6 +330,16 @@ module.exports = {
     return res.rows[0] ? res.rows[0].data : null;
   },
 
+  async getAllHosts() {
+    const res = await pool.query('SELECT data FROM hosts');
+    return res.rows.map((r) => r.data);
+  },
+
+  async deleteHost(email) {
+    await pool.query('DELETE FROM hosts WHERE email = $1', [email]);
+    return true;
+  },
+
   async updateHost(email, patch) {
     const current = await this.findHostByEmail(email);
     if (!current) return null;
