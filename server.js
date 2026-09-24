@@ -13,6 +13,7 @@ const geoRoutes = require('./routes/geo');
 const messagesRoutes = require('./routes/messages');
 const photosRoutes = require('./routes/photos');
 const reviewsRoutes = require('./routes/reviews');
+const subscriptionsRoutes = require('./routes/subscriptions');
 const stripeWebhookRoutes = require('./webhooks/stripeWebhook');
 
 const app = express();
@@ -47,6 +48,7 @@ app.use('/api', geoRoutes);
 app.use('/api', messagesRoutes);
 app.use('/api', photosRoutes);
 app.use('/api', reviewsRoutes);
+app.use('/api', subscriptionsRoutes);
 
 app.get('/', (req, res) => {
   res.send("API At'Chef — paiements marketplace via Stripe Connect (Express).");
