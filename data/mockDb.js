@@ -80,10 +80,9 @@ async function initSchema() {
     )
   `);
   /**
-   * Table des abonnements batch cooking. Distincte de `bookings` (qui reste
-   * pour l'offre événementielle ponctuelle, conservée en option secondaire).
-   * Un abonnement porte un jour de la semaine + un créneau horaire récurrent,
-   * défini d'après le modèle hebdomadaire type du cuisinier.
+   * Abonnements batch cooking — cœur unique de la marketplace désormais.
+   * `plan` distingue hebdomadaire ('weekly') et mensuel ('monthly'), chacun
+   * avec son propre prix fixé librement par le cuisinier.
    */
   await pool.query(`
     CREATE TABLE IF NOT EXISTS subscriptions (
@@ -102,11 +101,11 @@ async function initSchema() {
       id: 1, name: 'Amélie R.', email: 'amelie.r@example.com', passwordHash: null,
       lat: 47.2184, lng: -1.5536,
       stripeAccountId: null, identityVerified: false,
-      formulas: [
-        { id: 'f1', name: 'Menu Découverte', price: 25 },
-        { id: 'f2', name: 'Menu Terroir Breton', price: 32 },
-      ],
-      discountTiers: [{ minGuests: 6, discountPercent: 10 }],
+      regimes: ['sans_gluten'],
+      batchCookingPriceWeekly: 140,
+      batchCookingPriceMonthly: 480,
+      weeklyAvailability: [{ day: 'lundi', startTime: '09:00', endTime: '12:00' }],
+      availabilityExceptions: [],
     };
     await pool.query(
       'INSERT INTO cooks (id, email, stripe_account_id, data) VALUES ($1,$2,$3,$4)',
@@ -118,11 +117,11 @@ async function initSchema() {
       id: 2, name: 'Karim B.', email: 'karim.b@example.com', passwordHash: null,
       lat: 47.2065, lng: -1.5490,
       stripeAccountId: null, identityVerified: false,
-      formulas: [
-        { id: 'f1', name: 'Menu Mezzé', price: 28 },
-        { id: 'f2', name: 'Menu Fête', price: 38 },
-      ],
-      discountTiers: [],
+      regimes: ['vegetarien'],
+      batchCookingPriceWeekly: 150,
+      batchCookingPriceMonthly: 520,
+      weeklyAvailability: [{ day: 'mercredi', startTime: '14:00', endTime: '18:00' }],
+      availabilityExceptions: [],
     };
     await pool.query(
       'INSERT INTO cooks (id, email, stripe_account_id, data) VALUES ($1,$2,$3,$4)',
@@ -178,35 +177,20 @@ module.exports = {
       location: data.location,
       lat: typeof data.lat === 'number' ? data.lat : null,
       lng: typeof data.lng === 'number' ? data.lng : null,
-      unavailableDates: [],
-      // Modèle hebdomadaire type de disponibilité pour le batch cooking :
-      // ex. [{ day: 'lundi', startTime: '09:00', endTime: '12:00' }]
       weeklyAvailability: [],
-      // Dates précises où le cuisinier bloque une exception ponctuelle,
-      // même si son modèle hebdomadaire le rendrait normalement disponible.
       availabilityExceptions: [],
-      // Étiquettes de régime pour le filtrage par préférences de l'hôte.
       regimes: [],
-      // Prix libre de la formule batch cooking hebdomadaire (optionnel :
-      // un cuisinier peut proposer l'événementiel, le batch cooking, ou les deux).
-      batchCookingPrice: null,
+      batchCookingPriceWeekly: null,
+      batchCookingPriceMonthly: null,
       dishPhotos: [],
       stripeAccountId: null,
       identityVerified: false,
-      quote: data.bio
-        ? data.bio.slice(0, 140)
-        : `Nouveau sur At'Chef, hâte de vous régaler avec ma cuisine ${data.cuisine.toLowerCase()} !`,
       bio: data.bio || `Cuisinier passionné, récemment inscrit sur At'Chef. Spécialité : ${data.specialty}.`,
       specialties: [data.specialty],
-      tags: [],
       photo: '/no-photo-yet.jpg',
       gradient: NEW_COOK_GRADIENTS[id % NEW_COOK_GRADIENTS.length],
       rating: 0,
       reviews: 0,
-      training: null,
-      selfTaughtNote: "Nouveau cuisinier sur At'Chef.",
-      formulas: [{ id: 'f1', name: data.formulaName, price: data.formulaPrice, description: '', includes: [] }],
-      discountTiers: [],
       testimonials: [],
     };
     await pool.query(
@@ -218,39 +202,6 @@ module.exports = {
 
   async getAllCooks() {
     const res = await pool.query('SELECT data FROM cooks');
-    return res.rows.map((r) => r.data);
-  },
-
-  async createBooking(data) {
-    const id = Date.now();
-    const booking = {
-      id,
-      status: 'pending_payment',
-      createdAt: new Date().toISOString(),
-      ...data,
-    };
-    await pool.query(
-      'INSERT INTO bookings (id, cook_id, host_email, data) VALUES ($1,$2,$3,$4)',
-      [id, data.cookId || null, data.hostEmail || null, JSON.stringify(booking)]
-    );
-    return booking;
-  },
-
-  async findBookingById(id) {
-    const res = await pool.query('SELECT data FROM bookings WHERE id = $1', [Number(id)]);
-    return res.rows[0] ? res.rows[0].data : null;
-  },
-
-  async updateBooking(id, patch) {
-    const current = await this.findBookingById(id);
-    if (!current) return null;
-    const updated = { ...current, ...patch };
-    await pool.query('UPDATE bookings SET data = $1 WHERE id = $2', [JSON.stringify(updated), Number(id)]);
-    return updated;
-  },
-
-  async getAllBookings() {
-    const res = await pool.query('SELECT data FROM bookings ORDER BY id DESC');
     return res.rows.map((r) => r.data);
   },
 
@@ -422,19 +373,11 @@ module.exports = {
     return res.rows.map((r) => r.data);
   },
 
-  async findReviewByBookingAndRater(bookingId, raterRole) {
-    const res = await pool.query(
-      'SELECT data FROM reviews WHERE booking_id = $1 AND rater_role = $2',
-      [Number(bookingId), raterRole]
-    );
-    return res.rows[0] ? res.rows[0].data : null;
-  },
-
   async createReview(data) {
     const id = Date.now();
     const review = {
       id,
-      bookingId: data.bookingId,
+      subscriptionId: data.subscriptionId,
       raterRole: data.raterRole,
       cookId: data.cookId,
       hostEmail: data.hostEmail,
@@ -444,7 +387,7 @@ module.exports = {
     };
     await pool.query(
       'INSERT INTO reviews (id, booking_id, rater_role, data) VALUES ($1,$2,$3,$4)',
-      [id, review.bookingId, review.raterRole, JSON.stringify(review)]
+      [id, review.subscriptionId, review.raterRole, JSON.stringify(review)]
     );
     return review;
   },
@@ -488,13 +431,11 @@ module.exports = {
 
   /**
    * ============================================================================
-   * ABONNEMENTS BATCH COOKING
+   * ABONNEMENTS BATCH COOKING — seule offre de la marketplace
    * ============================================================================
-   * Un abonnement = un jour de semaine + un créneau horaire récurrent, chez un
-   * cuisinier donné, pour un hôte donné. Distinct de `bookings` (offre
-   * événementielle ponctuelle, conservée en option secondaire sur la plateforme).
-   *
-   * Prix stocké en deux lignes séparées et transparentes (jamais fusionnées) :
+   * `plan` : 'weekly' ou 'monthly', chacun avec son propre prix fixé par le
+   * cuisinier (pas de calcul automatique de l'un à partir de l'autre).
+   * Prix toujours stocké en deux lignes séparées et transparentes :
    * - cookPrice : la prestation du cuisinier, éligible au crédit d'impôt CESU
    * - serviceFee : les frais de service At'Chef (10%), non éligibles
    */
@@ -506,14 +447,15 @@ module.exports = {
       id,
       cookId: Number(data.cookId),
       hostEmail: data.hostEmail,
-      dayOfWeek: data.dayOfWeek, // 'lundi', 'mardi', ...
-      startTime: data.startTime, // '09:00'
-      endTime: data.endTime,     // '12:00'
+      plan: data.plan === 'monthly' ? 'monthly' : 'weekly',
+      dayOfWeek: data.dayOfWeek,
+      startTime: data.startTime,
+      endTime: data.endTime,
       cookPrice,
       serviceFee,
       totalPrice: Math.round((cookPrice + serviceFee) * 100) / 100,
-      status: 'active', // 'active' | 'paused' | 'cancelled'
-      skippedWeeks: [], // dates (lundi de la semaine) où l'hôte a reporté/sauté
+      status: 'active',
+      skippedWeeks: [],
       startDate: data.startDate,
       createdAt: new Date().toISOString(),
     };
