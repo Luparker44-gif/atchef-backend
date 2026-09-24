@@ -2,30 +2,17 @@
  * ============================================================================
  * BASE DE DONNÉES — PostgreSQL réel (remplace l'ancienne version en mémoire)
  * ============================================================================
- * ⚠️ Ce fichier s'appelle toujours "mockDb.js" pour que routes/ et webhooks/
- * n'aient RIEN à changer (ils font tous `require('../data/mockDb')`), mais
- * il ne s'agit plus d'un mock : chaque fonction interroge une vraie base
- * PostgreSQL via la variable d'environnement DATABASE_URL. Les données
- * survivent désormais aux redémarrages du serveur.
- *
- * Choix de conception : chaque table a quelques colonnes "en dur" utiles
- * pour la recherche (id, email, stripeAccountId...) + une colonne JSONB
- * `data` qui contient l'objet complet. Ça évite d'avoir à lister et migrer
- * une colonne SQL par champ (formulas, discountTiers, tags...), au prix
- * d'un peu moins d'optimisation — largement suffisant à l'échelle d'un MVP.
  */
 
 const { Pool } = require('pg');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // La plupart des fournisseurs hébergés (Supabase, Render Postgres...)
-  // exigent une connexion SSL, avec un certificat non reconnu par défaut
-  // par Node — sans cette option, la connexion échoue.
   ssl: { rejectUnauthorized: false },
 });
 
 const CUISINE_TYPES = ['Française & Bistrot', 'Italienne', 'Orientale & Méditerranéenne', 'Asiatique', 'Végétarienne & Vegan', 'Pâtisserie & Desserts'];
+const REGIME_TAGS = ['vegan', 'vegetarien', 'sans_gluten', 'sans_lactose', 'proteine_sportif'];
 
 const NEW_COOK_GRADIENTS = [
   'linear-gradient(135deg,#E2725B,#A64A34)',
@@ -34,11 +21,6 @@ const NEW_COOK_GRADIENTS = [
   'linear-gradient(135deg,#E2725B,#7A3524)',
 ];
 
-/**
- * Crée les tables si elles n'existent pas encore, et insère les cuisiniers
- * de démonstration (Amélie, Karim) UNE SEULE FOIS. Appelée une fois au
- * démarrage du serveur (voir server.js), avant d'accepter des requêtes.
- */
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cooks (
@@ -90,6 +72,27 @@ async function initSchema() {
       data JSONB NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS landing_signups (
+      id BIGINT PRIMARY KEY,
+      email TEXT NOT NULL,
+      data JSONB NOT NULL
+    )
+  `);
+  /**
+   * Table des abonnements batch cooking. Distincte de `bookings` (qui reste
+   * pour l'offre événementielle ponctuelle, conservée en option secondaire).
+   * Un abonnement porte un jour de la semaine + un créneau horaire récurrent,
+   * défini d'après le modèle hebdomadaire type du cuisinier.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id BIGINT PRIMARY KEY,
+      cook_id BIGINT,
+      host_email TEXT,
+      data JSONB NOT NULL
+    )
+  `);
 
   const existing = await pool.query('SELECT id FROM cooks WHERE id IN (1, 2)');
   const existingIds = existing.rows.map((r) => Number(r.id));
@@ -131,6 +134,7 @@ async function initSchema() {
 module.exports = {
   initSchema,
   CUISINE_TYPES,
+  REGIME_TAGS,
 
   async findCookById(id) {
     const res = await pool.query('SELECT data FROM cooks WHERE id = $1', [Number(id)]);
@@ -175,6 +179,17 @@ module.exports = {
       lat: typeof data.lat === 'number' ? data.lat : null,
       lng: typeof data.lng === 'number' ? data.lng : null,
       unavailableDates: [],
+      // Modèle hebdomadaire type de disponibilité pour le batch cooking :
+      // ex. [{ day: 'lundi', startTime: '09:00', endTime: '12:00' }]
+      weeklyAvailability: [],
+      // Dates précises où le cuisinier bloque une exception ponctuelle,
+      // même si son modèle hebdomadaire le rendrait normalement disponible.
+      availabilityExceptions: [],
+      // Étiquettes de régime pour le filtrage par préférences de l'hôte.
+      regimes: [],
+      // Prix libre de la formule batch cooking hebdomadaire (optionnel :
+      // un cuisinier peut proposer l'événementiel, le batch cooking, ou les deux).
+      batchCookingPrice: null,
       dishPhotos: [],
       stripeAccountId: null,
       identityVerified: false,
@@ -261,11 +276,10 @@ module.exports = {
   async getAllTickets() {
     const res = await pool.query('SELECT data FROM tickets ORDER BY id DESC');
     const tickets = res.rows.map((r) => r.data);
-    // Les tickets urgents remontent toujours en premier, quelle que soit leur date.
     return tickets.sort((a, b) => {
       if (a.priority === 'urgent' && b.priority !== 'urgent') return -1;
       if (a.priority !== 'urgent' && b.priority === 'urgent') return 1;
-      return 0; // conserve l'ordre "plus récent d'abord" déjà établi par la requête SQL
+      return 0;
     });
   },
 
@@ -348,11 +362,6 @@ module.exports = {
     return updated;
   },
 
-  /**
-   * Une conversation est identifiée par la PAIRE (hostEmail, cookId) — pas
-   * besoin d'être passé par une réservation pour se parler (ex. poser une
-   * question avant de réserver).
-   */
   async findConversationByPair(hostEmail, cookId) {
     const res = await pool.query(
       'SELECT data FROM conversations WHERE host_email = $1 AND cook_id = $2',
@@ -413,12 +422,6 @@ module.exports = {
     return res.rows.map((r) => r.data);
   },
 
-  /**
-   * Système d'avis À DOUBLE SENS : un hôte note le cuisinier après le
-   * repas, mais le cuisinier note aussi l'hôte — c'est ce deuxième sens,
-   * absent jusqu'ici, qui permet de repérer un hôte qui se comporterait
-   * mal avant qu'un autre cuisinier n'accepte sa prochaine réservation.
-   */
   async findReviewByBookingAndRater(bookingId, raterRole) {
     const res = await pool.query(
       'SELECT data FROM reviews WHERE booking_id = $1 AND rater_role = $2',
@@ -432,7 +435,7 @@ module.exports = {
     const review = {
       id,
       bookingId: data.bookingId,
-      raterRole: data.raterRole, // 'host' note le cuisinier, 'cook' note l'hôte
+      raterRole: data.raterRole,
       cookId: data.cookId,
       hostEmail: data.hostEmail,
       rating: data.rating,
@@ -446,7 +449,6 @@ module.exports = {
     return review;
   },
 
-  /** Avis reçus par un CUISINIER (déposés par des hôtes) — affichés publiquement sur son profil. */
   async getReviewsForCook(cookId) {
     const res = await pool.query(
       `SELECT data FROM reviews WHERE (data->>'cookId')::bigint = $1 AND rater_role = 'host' ORDER BY (data->>'createdAt') DESC`,
@@ -455,12 +457,104 @@ module.exports = {
     return res.rows.map((r) => r.data);
   },
 
-  /** Avis reçus par un HÔTE (déposés par des cuisiniers) — jamais publics, utilisés uniquement pour alerter un futur cuisinier. */
   async getReviewsForHost(hostEmail) {
     const res = await pool.query(
       `SELECT data FROM reviews WHERE data->>'hostEmail' = $1 AND rater_role = 'cook' ORDER BY (data->>'createdAt') DESC`,
       [hostEmail]
     );
+    return res.rows.map((r) => r.data);
+  },
+
+  async createLandingSignup(data) {
+    const id = Date.now();
+    const signup = {
+      id,
+      email: data.email,
+      role: data.role === 'cook' ? 'cook' : 'host',
+      answers: data.answers || {},
+      createdAt: new Date().toISOString(),
+    };
+    await pool.query(
+      'INSERT INTO landing_signups (id, email, data) VALUES ($1,$2,$3)',
+      [id, signup.email, JSON.stringify(signup)]
+    );
+    return signup;
+  },
+
+  async getAllLandingSignups() {
+    const res = await pool.query('SELECT data FROM landing_signups ORDER BY id DESC');
+    return res.rows.map((r) => r.data);
+  },
+
+  /**
+   * ============================================================================
+   * ABONNEMENTS BATCH COOKING
+   * ============================================================================
+   * Un abonnement = un jour de semaine + un créneau horaire récurrent, chez un
+   * cuisinier donné, pour un hôte donné. Distinct de `bookings` (offre
+   * événementielle ponctuelle, conservée en option secondaire sur la plateforme).
+   *
+   * Prix stocké en deux lignes séparées et transparentes (jamais fusionnées) :
+   * - cookPrice : la prestation du cuisinier, éligible au crédit d'impôt CESU
+   * - serviceFee : les frais de service At'Chef (10%), non éligibles
+   */
+  async createSubscription(data) {
+    const id = Date.now();
+    const cookPrice = Number(data.cookPrice);
+    const serviceFee = Math.round(cookPrice * 0.10 * 100) / 100;
+    const subscription = {
+      id,
+      cookId: Number(data.cookId),
+      hostEmail: data.hostEmail,
+      dayOfWeek: data.dayOfWeek, // 'lundi', 'mardi', ...
+      startTime: data.startTime, // '09:00'
+      endTime: data.endTime,     // '12:00'
+      cookPrice,
+      serviceFee,
+      totalPrice: Math.round((cookPrice + serviceFee) * 100) / 100,
+      status: 'active', // 'active' | 'paused' | 'cancelled'
+      skippedWeeks: [], // dates (lundi de la semaine) où l'hôte a reporté/sauté
+      startDate: data.startDate,
+      createdAt: new Date().toISOString(),
+    };
+    await pool.query(
+      'INSERT INTO subscriptions (id, cook_id, host_email, data) VALUES ($1,$2,$3,$4)',
+      [id, subscription.cookId, subscription.hostEmail, JSON.stringify(subscription)]
+    );
+    return subscription;
+  },
+
+  async findSubscriptionById(id) {
+    const res = await pool.query('SELECT data FROM subscriptions WHERE id = $1', [Number(id)]);
+    return res.rows[0] ? res.rows[0].data : null;
+  },
+
+  async updateSubscription(id, patch) {
+    const current = await this.findSubscriptionById(id);
+    if (!current) return null;
+    const updated = { ...current, ...patch };
+    await pool.query('UPDATE subscriptions SET data = $1 WHERE id = $2', [JSON.stringify(updated), Number(id)]);
+    return updated;
+  },
+
+  async getSubscriptionsForHost(hostEmail) {
+    const res = await pool.query(
+      `SELECT data FROM subscriptions WHERE host_email = $1 ORDER BY id DESC`,
+      [hostEmail]
+    );
+    return res.rows.map((r) => r.data);
+  },
+
+  async getSubscriptionsForCook(cookId) {
+    const res = await pool.query(
+      `SELECT data FROM subscriptions WHERE cook_id = $1 ORDER BY id DESC`,
+      [Number(cookId)]
+    );
+    return res.rows.map((r) => r.data);
+  },
+
+  async getAllSubscriptions() {
+    const res = await pool.query('SELECT data FROM subscriptions ORDER BY id DESC');
     return res.rows.map((r) => r.data);
   },
 };
